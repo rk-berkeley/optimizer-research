@@ -1,0 +1,174 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,top=1in,bottom=1in,left=1.1in,right=1.1in]{geometry}
+\usepackage{microtype}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\norm}[1]{\left\|#1\right\|}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[font=small,labelfont=bf,labelsep=period,skip=4pt]{caption}
+\usepackage{subcaption,float}
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+\usepackage[numbers,sort&compress,square]{natbib}
+\bibliographystyle{abbrvnat}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\bfseries\large}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\bfseries\normalsize}{\thesubsection}{0.6em}{}
+\titleformat{\paragraph}[runin]{\normalfont\bfseries}{}{0pt}{}
+\titlespacing*{\section}{0pt}{11pt plus 2pt minus 2pt}{3pt}
+\titlespacing*{\subsection}{0pt}{7pt plus 1pt}{2pt}
+\titlespacing*{\paragraph}{0pt}{3pt}{0.6em}
+\makeatletter
+\renewcommand{\maketitle}{%
+  \begin{center}{\Large\bfseries\@title\par}\vskip0.5em
+  {\normalsize\@author\par}\vskip0.3em{\small\@date\par}\end{center}\vspace{0.4em}}
+\makeatother
+
+\title{A Critical Review of Matrix-Aware Optimizers:\\[2pt]From Adam to Muon and its Variants}
+\author{Romir Kant\\[2pt]IND ENG 290: Stochastic Optimization for Machine Learning}
+\date{Spring 2026}
+
+\begin{document}
+\maketitle\vspace{-0.8em}
+
+\begin{abstract}
+\noindent
+Muon is the most significant optimizer to emerge in the deep learning ecosystem since Adam, and the community is making the same mistakes it made with Adam. Adam shipped in 2014 with a convergence proof that turned out to be wrong. Nobody noticed for four years, by which time the algorithm was already running everywhere. Muon shipped in 2024 as a blog post with no convergence proof at all, and is now running at the trillion-parameter scale. The four papers that tried to prove Muon's convergence in 2025 managed only to show it is no faster than SGD asymptotically, and they disagree with each other about which proofs are valid. This report goes through that story critically, tests the main empirical claims on CIFAR-10 and TinyShakespeare, and asks where the next useful work might actually go. Three recent variants are implemented and tested alongside the baseline: Dion, a NorMuon-family variant called MuonW, and MuonClip, which is the optimizer Moonshot AI used to train their Kimi K2 model at 1.04 trillion parameters.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Adam has been the default optimizer for deep learning for roughly a decade \citep{kingma2014adam,loshchilov2019decoupled}. It is not the only optimizer that has worked; Shampoo \citep{gupta2018shampoo}, KFAC \citep{martens2015kfac}, and SOAP \citep{vyas2024soap} have all beaten it in controlled settings. But none of them displaced it in daily practice. Muon \citep{jordan2024muon} may be different. It holds current speed records on the NanoGPT and CIFAR-10 speedruns, has been validated at 16B parameters \citep{liu2025moonlight}, and now powers Kimi K2 at 1.04 trillion parameters via the MuonClip variant \citep{moonshot2025kimik2}. At the time of writing, Muon is being adopted across frontier labs in a way that no previous challenger to Adam has been.
+
+What makes Muon unusual algorithmically is that it does not approximate second-order information at all. KFAC and Shampoo spend per-step compute on curvature preconditioners. Muon instead orthogonalizes the momentum buffer through a few iterations of a Newton-Schulz polynomial, producing an update whose singular values are all roughly equal. The geometric interpretation came later \citep{bernstein2024modular}: this is steepest descent in the spectral norm rather than the Euclidean norm. The interpretation is clean and consistent with the empirical behavior, but it is worth being clear that the algorithm came first and the explanation followed.
+
+The convergence theory story is messier. Four papers appeared in 2025 trying to analyze Muon \citep{li2025note,shen2025convergence,chang2025beyond,crawshaw2025exploration}. The best result for the algorithm people actually deploy is $\mathcal{O}(T^{-1/4})$ stationarity — the same rate as SGD. The $\mathcal{O}(T^{-1/3})$ result of \citet{chang2025beyond} requires a different algorithm under stronger assumptions. Several proofs in the concurrent literature contain errors that other authors flag. The theory does not explain Muon's empirical advantage. Nobody knows why it works as well as it does.
+
+\section{Background: The Adam Cautionary Tale}
+\label{sec:adam}
+
+Adam \citep{kingma2014adam} combines momentum with per-parameter adaptive learning rates. With $g_t$ the stochastic gradient at step $t$, $\beta_1,\beta_2\in[0,1)$ exponential decay rates, $\eta$ the learning rate, and $\epsilon>0$:
+\begin{align}
+m_t &= \beta_1 m_{t-1}+(1-\beta_1)g_t,\quad v_t=\beta_2 v_{t-1}+(1-\beta_2)g_t^2,\nonumber\\
+\hat m_t &= m_t/(1-\beta_1^t),\quad\hat v_t=v_t/(1-\beta_2^t),\quad
+x_{t+1} = x_t - \eta\,\hat m_t/(\sqrt{\hat v_t}+\epsilon).
+\end{align}
+
+\paragraph{The flawed proof.}
+The original paper claimed $\mathcal{O}(\log T/\sqrt{T})$ regret in the convex online setting. \citet{reddi2018convergence} showed this was wrong. The proof implicitly assumed $\eta/\sqrt{\hat v_t}$ is non-increasing in $t$, which is false for Adam. They constructed a simple one-dimensional convex counterexample where Adam cycles and never converges. The fix (AMSGrad, replacing $\hat v_t$ with $\max(\hat v_{t-1},\hat v_t)$) is straightforward. The error is not.
+
+This matters for two reasons. The bug is structural, not a typo. It took four years for someone to notice, during which Adam became the unchallenged default at every scale. And the practical response was not to switch to AMSGrad but to adopt AdamW \citep{loshchilov2019decoupled}, a decoupled weight decay variant whose theoretical justification also arrived after deployment. The community did not wait for the math. The algorithm that worked got used. With Muon, the same thing is happening, only faster and with the theory further behind.
+
+\section{Muon: Mechanics, Derivations, and Critiques}
+\label{sec:muon}
+
+\subsection{Muon among matrix-aware optimizers}
+The matrix-aware family goes back to KFAC \citep{martens2015kfac} and Shampoo \citep{gupta2018shampoo}. KFAC approximates the Fisher matrix with a Kronecker product of per-layer factors. Shampoo maintains matrix square-root preconditioners per layer. \citet{anil2020scalable} made Shampoo practical, and SOAP \citep{vyas2024soap} further stabilized it. All of these spend per-step compute on preconditioners. Muon does not. It spends per-step compute orthogonalizing the momentum buffer instead, through a polynomial map that pushes all singular values toward 1. Memory: no $v_t$ buffer, roughly 50\% optimizer state savings. The trade-off is that the orthogonalization itself takes compute, though at $N=5$ Newton-Schulz iterations the overhead is small (about 3\% per step at the model sizes tested here, and considerably less at larger scales where other bottlenecks dominate).
+
+\subsection{The algorithm}
+Muon applies only to two-dimensional weight matrices. Everything else (biases, layer norms, embeddings, output head) uses an auxiliary AdamW. For weight matrix $W\in\R^{n\times m}$ with stochastic gradient $G_t$:
+\begin{align}
+B_t &= \mu B_{t-1}+G_t,\qquad U_t=G_t+\mu B_t\;\text{(Nesterov lookahead)},\\
+O_t &= \mathrm{orth}(U_t)\approx UV^\top,\quad\text{where }U_t=USV^\top,\\
+W_{t+1} &= W_t - \eta\cdot 0.2\sqrt{\max(n,m)}\cdot O_t.
+\end{align}
+The scale factor $0.2\sqrt{\max(n,m)}$ is from \citet{liu2025moonlight}: it aligns the RMS of the update across layers of different sizes so the same learning rate works everywhere. The orthogonalization uses quintic Newton-Schulz with coefficients $(a,b,c)=(3.4445,-4.7750,2.0315)$:
+\begin{equation}
+X\leftarrow X/\norm{X},\qquad X\leftarrow aX+(bXX^\top+cX^2X^\top)X,
+\end{equation}
+repeated $N=5$ times, after which $O_t^\top O_t\approx I$.
+
+\subsection{On the claimed advantages}
+The memory saving is real. No $v_t$ means roughly half the optimizer state of Adam, which matters at scale. The geometry claim (``orthogonalization rebalances gradient directions'') is true in the sense that all singular values of the update are forced toward 1, so no single direction of the weight matrix gets a disproportionately large update. Whether this is good depends on whether the true gradient's singular structure reflects actual curvature or mostly noise; the theory does not settle this. The 2$\times$ speedup claim is the hardest to evaluate. A community speedrun record reflects non-trivial tuning effort on both sides, but the tuning is not symmetric: participants are optimizing against the current record, so the AdamW baseline is not necessarily the best achievable AdamW. The speedup is real but its magnitude is uncertain.
+
+\subsection{The retrospective derivation problem}
+\citet{bernstein2024modular} derive Muon as steepest descent under the spectral norm on the weight space, rather than the Euclidean norm assumed by standard gradient descent. This is a clean result. But the algorithm was found empirically on speedrun benchmarks; the geometric interpretation came after. Both the spectral-norm framing and an alternative RMS-to-RMS operator-norm framing (from Bernstein's later note, which gives width-invariant LR transfer) require design choices not pinned down by the empirical evidence. Closely related ideas appear in stochastic spectral descent \citep{carlson2015stochastic} and duality structure gradient descent \citep{flynn2017duality}. Muon's actual contribution is the Newton-Schulz orthogonalization on the GPU, which made this family of updates fast enough to be practical. The geometry was not new; the implementation was.
+
+\section{Convergence Theory: A 2025 Mess}
+\label{sec:theory}
+
+No convergence proof accompanied the original Muon release. Four came in 2025, and they do not form a coherent picture.
+
+\paragraph{Li and Hong.}
+\citet{li2025note} are first, writing a short note that identifies Muon as spectral-norm steepest descent and provides an informal analysis. More usefully, they identify mathematical errors in concurrent independent attempts at the same analysis, specifically that published inequalities bounding the Newton-Schulz orthogonalization error are incorrect. Subsequent papers \citep{chang2025beyond} confirm this.
+
+\paragraph{Shen et al.}
+\citet{shen2025convergence} give the first rigorous nonconvex analysis. Under $L$-smoothness and bounded-variance gradients they prove:
+\begin{equation}
+\min_{0\le t<T}\E\norm{\nabla f(W_t)}_*\le\mathcal{O}(T^{-1/4}).
+\end{equation}
+This is the standard nonconvex stochastic rate. It is the same as plain SGD. The theory offers no explanation for why Muon is empirically faster than Adam. That gap is the central open problem in the theory.
+
+\paragraph{Chang et al.}
+\citet{chang2025beyond} prove $\mathcal{O}(T^{-1/3})$ for Muon-MVR, a variance-reduced variant, and show this matches their lower bound $\Omega(T^{-1/3})$ for the class. The result is tight. The problem is that Muon-MVR is not Muon: it requires mean-squared smoothness (strictly stronger than Lipschitz) and additional gradient evaluations at each step. The deployed algorithm has neither. A tight convergence result for a related but different algorithm does not explain the behavior of the algorithm people actually train with.
+
+\paragraph{What the theory does and does not say.}
+\Cref{tab:conv} summarizes the landscape.
+
+\begin{table}[h]
+\centering\footnotesize
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.9cm}p{2.5cm}p{3.8cm}p{3.8cm}}
+\toprule
+Paper & Rate & Assumptions & Notes \\
+\midrule
+\citet{li2025note} & informal & $L$-smooth, spectral norm & Flags errors in concurrent proofs \\
+\citet{shen2025convergence} & $\mathcal{O}(T^{-1/4})$ & $L$-smooth, bounded variance & Matches SGD; no theoretical advantage \\
+\citet{chang2025beyond} & $\mathcal{O}(T^{-1/3})$, tight & Mean-sq.\ smooth, variance reduction & Algorithm differs from deployed Muon \\
+\citet{crawshaw2025exploration} & various & Design choice taxonomy & No unified result \\
+\bottomrule
+\end{tabular}
+\caption{2025 Muon convergence papers. The deployed algorithm has no proven asymptotic advantage over SGD under standard assumptions.}
+\label{tab:conv}
+\end{table}
+
+None of the assumption sets are empirically verified for transformers. \citet{dong2025quantifying} measure the Hessian of trained transformers and find it highly anisotropic: the spectral-norm Lipschitz constant can be orders of magnitude larger than the Frobenius-norm version. The published rates bound a quantity whose constant prefactors are completely unknown. This is the same situation Adam was in after AMSGrad: proofs exist, they give the right-order rates, and they say essentially nothing useful about why the algorithm works in practice. The appropriate response is not to stop using Muon. It is to stop claiming the theory explains it.
+
+\section{Variants: Which Extensions Are Worth Taking Seriously}
+\label{sec:variants}
+
+There are five notable variants. Three are tested experimentally below.
+
+\paragraph{AdaMuon.}
+\citet{si2025adamuon} restore a per-element second-moment term $v_t$ to the orthogonalized update. The motivation is that Muon throws away per-coordinate gradient variance information that Adam uses for stability. The reported gain is 40\%+ efficiency over Adam at scale. The problem is that this directly undermines Muon's main claimed advantage. Muon eliminates $v_t$ to save memory. AdaMuon puts it back. If the second moment is necessary for good performance, then Muon's memory advantage disappears at scale. If it is not necessary, the AdaMuon gain cannot exist. The experiments below suggest both halves of this tension can be true simultaneously depending on the task, which is an interesting finding but not a resolution.
+
+\paragraph{Dion.}
+\citet{ahn2025dion} solve a real problem. Newton-Schulz iteration requires dense matrix-matrix multiplications on the full weight matrix, which breaks cleanly under single-device training but becomes a communication bottleneck when weight matrices are sharded across devices in tensor parallelism. Dion replaces Newton-Schulz with amortized power iteration on a rank-$r$ factorization of the momentum. This reduces FLOPs and fits naturally into tensor-parallel layouts. The approximation error is analyzed. Dion is the most honest variant in the literature: it defines the problem it solves, solves it, and quantifies the cost. The cost is real: rank-$r$ approximation loses directional information, which shows up in the experiments at small scale where all weight matrix directions matter.
+
+\paragraph{Muon-MVR.}
+This is the variance-reduced variant from \citet{chang2025beyond}, discussed in \Cref{sec:theory}. The convergence result is the strongest in the literature. The algorithm is not practically deployable without significant engineering work. It is worth knowing about, but not currently useful for training.
+
+\paragraph{NorMuon family (MuonW).}
+A post-step projection: after each Muon update, rescale any weight matrix whose spectral norm exceeds a threshold $\sigma_{\max}$ back down by the ratio. The motivation is that Muon controls the magnitude of each update but not the cumulative weight norm, which can drift. The projection is cheap (a few power iterations) and straightforward to implement. Whether it helps depends on whether weight norm growth is actually causing problems, which is model and task dependent.
+
+\paragraph{MuonClip.}
+Moonshot AI's Kimi K2 report \citep{moonshot2025kimik2} introduces MuonClip, the most scale-validated Muon variant in existence. After each optimizer step, the forward pass records the maximum pre-softmax attention logit per block; any block exceeding threshold $\tau$ has its Q and K weight rows rescaled by $\sqrt{\tau/\mathrm{max\_logit}}$. This addresses a failure mode that pure Muon hits at large scale: bounded-norm updates do not prevent the Q and K matrices from growing, and once attention logits exceed roughly 100, the softmax saturates, gradient flow through attention nearly stops, and loss spikes follow. At Kimi K2 scale, QK-Clip kept the loss curve smooth across 15.5 trillion tokens with zero instability events. It is notable as the first Muon variant that is model-aware rather than purely optimizer-side, suggesting that stability at scale is a joint optimization-architecture problem, not an optimizer problem alone.
+
+\paragraph{Broader context.}
+The same period has produced Lion \citep{chen2023lion} (sign-based momentum, no $v_t$), AdEMAMix \citep{pagliardini2024ademamix} (two first-moment timescales), and Adam-mini \citep{zhang2024adammini} (block-wise second moments). These attack the same bottlenecks from different directions. No controlled head-to-head comparison of all of them exists.
+
+\input{experiments.tex}
+
+\section{Discussion}
+\label{sec:discussion}
+\enlargethispage{2\baselineskip}
+
+The experiments confirm that Muon's per-step advantage over AdamW is real at small scale, the variants are inconsistent, and MuonClip's benefit is scale-dependent in exactly the way the mechanism predicts.
+
+\paragraph{The theory-practice gap is the main open problem.}
+Shen et al.'s $\mathcal{O}(T^{-1/4})$ result proves Muon converges. It says nothing about why it converges faster than AdamW in practice. The right proof would exploit something about the geometry of the loss landscape that Muon's bounded-operator-norm update takes advantage of. The anisotropic Hessian measurements of \citet{dong2025quantifying} point toward a concrete direction: rates that depend on the spectral-vs-Frobenius gap of the loss landscape, where Muon's bounded operator norm would pay off proportionally.
+
+\paragraph{Variant evaluation and the QK-Clip gap.}
+AdaMuon beats Muon on one task and loses on another. Dion loses at small scale but would win in distributed training. MuonW is a marginal improvement on language modeling. MuonClip is essential at trillion-parameter scale and unnecessary below it. None of these rankings are stable across settings, and the literature lacks a benchmark that would let someone choose the right variant for a given scenario. The MuonClip case makes a deeper point: none of the 2025 convergence papers predicts that attention logit explosion would occur, because they treat the optimizer in isolation. The actual failure mode is a joint property of the optimizer and the attention mechanism. This is a gap in how the theory is set up, not just the tightness of the bounds.
+
+Adam shipped with a flawed proof in 2014 and remained the default for a decade. Muon is on a similar trajectory. The field is at a point where the most valuable contributions are not more convergence upper bounds under slightly weaker assumptions, but better empirical methodology, scale-aware variant evaluation, and theory that treats the optimizer and model architecture as a coupled system. The MuonClip result makes this last point hard to ignore.
+
+\clearpage
+\bibliography{refs}
+\end{document}
