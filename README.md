@@ -1,8 +1,6 @@
 # Muon Optimizer: Critical Review and Reproducibility Study
 
-**Paper:** *A Critical Review of Matrix-Aware Optimizers: From Adam to Muon and its Variants*  
-**Author:** Romir Kant · IND ENG 290: Stochastic Optimization for Machine Learning · Spring 2026 · USC  
-**PDF:** [`report/IndEng290_RomirKant_Final.pdf`](report/IndEng290_RomirKant_Final.pdf)
+**Paper:** *A Critical Review of Matrix-Aware Optimizers: From Adam to Muon and its Variants*
 
 ---
 
@@ -71,7 +69,7 @@ The central thesis: Muon is on the same trajectory as Adam — deployed at scale
 │   ├── main.tex             # Paper LaTeX source
 │   ├── experiments.tex      # Experiments section (included by main.tex)
 │   ├── refs.bib             # Bibliography (17 references)
-│   └── IndEng290_RomirKant_Final.pdf  # Compiled paper
+│   └── muon_review.pdf              # Compiled paper
 ├── reproduce.sh             # End-to-end reproduction script
 ├── requirements.txt
 └── .gitignore
@@ -173,15 +171,3 @@ The quintic polynomial `X ← aX + (bXX^T + cXX^TX)X` with `(a, b, c) = (3.4445,
 
 The deployed algorithm has no proven asymptotic advantage over SGD under standard assumptions.
 
----
-
-## Citation
-
-```bibtex
-@article{kant2026muon,
-  title   = {A Critical Review of Matrix-Aware Optimizers: From Adam to Muon and its Variants},
-  author  = {Kant, Romir},
-  journal = {IND ENG 290 Course Report, University of Southern California},
-  year    = {2026}
-}
-```
