@@ -292,12 +292,16 @@ def fig_logit_growth():
          dict(color=COLORS["muonclip"], linestyle="--")),
     ]:
         keys = [k for k in logs if match_fn(k)]
+        # Filter to runs that actually recorded max_logits (older logs may lack it).
+        keys = [k for k in keys if logs[k].get("max_logits") and
+                any(x is not None for x in logs[k]["max_logits"])]
         if not keys:
             continue
         n = min(len(logs[k]["max_logits"]) for k in keys)
         steps  = np.array(logs[keys[0]]["steps"][:n])
-        logits = np.array([[x for x in logs[k]["max_logits"][:n]] for k in keys],
-                           dtype=float)
+        logits = np.array([[x if x is not None else float("nan")
+                            for x in logs[k]["max_logits"][:n]]
+                           for k in keys], dtype=float)
         m  = np.nanmean(logits, axis=0)
         se = np.nanstd(logits, axis=0) / np.sqrt(max(len(keys), 1))
         ax.plot(steps, m, label=label, **style)
