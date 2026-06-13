@@ -14,7 +14,7 @@ This repo contains:
 - **The full paper** (LaTeX source + compiled PDF)
 - **Pre-computed results** (57 JSON experiment logs, 3 seeds each) and all figures
 
-The central thesis: Muon is on the same trajectory as Adam — deployed at scale with empirical results well ahead of the theory. The four convergence papers published in 2025 collectively prove only that Muon converges at the same *asymptotic rate* as SGD. Nobody knows why it's faster in practice.
+The central thesis: Muon is on the same trajectory as Adam. Deployed at scale with empirical results well ahead of the theory. The four convergence papers published in 2025 collectively prove only that Muon converges at the same *asymptotic rate* as SGD. Nobody knows why it's faster in practice.
 
 ---
 
